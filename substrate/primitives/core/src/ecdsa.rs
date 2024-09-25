@@ -50,6 +50,21 @@ pub const PUBLIC_KEY_SERIALIZED_SIZE: usize = 33;
 /// The byte length of signature
 pub const SIGNATURE_SERIALIZED_SIZE: usize = 65;
 
+/// Half of the secp256k1 curve order (N/2).
+/// Signatures with s > HALF_ORDER are considered "high-S" and malleable.
+/// Per BIP-62 and EIP-2, only low-S signatures (s <= N/2) should be accepted.
+pub const SECP256K1_HALF_ORDER: [u8; 32] = [
+	0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0xff, 0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b,
+	0x20, 0xa0,
+];
+
+/// Returns `true` if the S component of a 65-byte ECDSA signature (R||S||V) is in
+/// the low range (s <= N/2), i.e. the signature is canonical.
+pub fn is_signature_normalized(sig: &[u8; 65]) -> bool {
+	sig[32..64] <= SECP256K1_HALF_ORDER[..]
+}
+
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct EcdsaTag;
@@ -158,7 +173,7 @@ impl<PUBLIC: From<PublicKey>> GenericSignature<PUBLIC> {
 		let rid = RecoveryId::from_i32(self.0[64] as i32).ok()?;
 		let sig = RecoverableSignature::from_compact(&self.0[..64], rid).ok()?;
 		let message = Message::from_digest_slice(message).expect("Message is a 32 bytes hash; qed");
-		SECP256K1.recover_ecdsa(&message, &sig).ok().map(From::from)
+		SECP256K1.recover_ecdsa(message, &sig).ok().map(From::from)
 	}
 }
 
@@ -237,7 +252,7 @@ impl<PUBLIC> From<RecoverableSignature> for GenericSignature<PUBLIC> {
 		let (recid, sig) = recsig.serialize_compact();
 		r.0[..64].copy_from_slice(&sig);
 		// This is safe due to the limited range of possible valid ids.
-		r.0[64] = recid.to_i32() as u8;
+		r.0[64] = recid as u8;
 		r
 	}
 }
@@ -460,17 +475,41 @@ where
 		{
 			let message =
 				Message::from_digest_slice(message).expect("Message is a 32 bytes hash; qed");
-			SECP256K1.sign_ecdsa_recoverable(&message, &self.secret).into()
+			let native_sig = SECP256K1.sign_ecdsa_recoverable(message, &self.secret);
+			#[cfg(debug_assertions)]
+			{
+				let (_, compact) = native_sig.serialize_compact();
+				assert!(
+					compact[32..] <= SECP256K1_HALF_ORDER[..],
+					"secp256k1 signing must produce low-S signatures"
+				);
+			}
+			native_sig.into()
 		}
 
 		#[cfg(not(feature = "std"))]
 		{
-			// Signing fails only if the `message` number of bytes is less than the field length
-			// (unfallible as we're using a fixed message length of 32).
-			self.secret
+			let (raw_sig, recovery_id) = self
+				.secret
 				.sign_prehash_recoverable(message)
-				.expect("Signing can't fail when using 32 bytes message hash. qed.")
-				.into()
+				.expect("Signing can't fail when using 32 bytes message hash. qed.");
+
+			// k256 normalizes via RFC 6979 but we explicitly ensure low-S
+			let (normalized_sig, adjusted_v) = if raw_sig.normalize_s().is_some() {
+				let normalized = raw_sig.normalize_s().unwrap();
+				(normalized, k256::ecdsa::RecoveryId::from_byte(recovery_id.to_byte() ^ 1).unwrap())
+			} else {
+				(raw_sig, recovery_id)
+			};
+			#[cfg(debug_assertions)]
+			{
+				let sig_bytes = normalized_sig.to_bytes();
+				assert!(
+					sig_bytes[32..] <= SECP256K1_HALF_ORDER[..],
+					"secp256k1 signing must produce low-S signatures"
+				);
+			}
+			(normalized_sig, adjusted_v).into()
 		}
 	}
 }
@@ -800,7 +839,7 @@ mod test {
 			#[cfg(feature = "std")]
 			{
 				let message = Message::from_digest_slice(&msg).unwrap();
-				SECP256K1.sign_ecdsa_recoverable(&message, &pair.secret).into()
+				SECP256K1.sign_ecdsa_recoverable(message, &pair.secret).into()
 			}
 			#[cfg(not(feature = "std"))]
 			{
@@ -869,5 +908,97 @@ mod test {
 			false
 		);
 		assert!(!Pair::verify_proof_of_possession(not_owner, &proof_of_possession, &pair.public()));
+	}
+
+	#[test]
+	fn is_signature_normalized_accepts_low_s() {
+		// S value of all zeros is low
+		let mut sig = [0u8; 65];
+		assert!(is_signature_normalized(&sig));
+
+		// S = HALF_ORDER is accepted (boundary, still low)
+		sig[32..64].copy_from_slice(&SECP256K1_HALF_ORDER);
+		assert!(is_signature_normalized(&sig));
+	}
+
+	#[test]
+	fn is_signature_normalized_rejects_high_s() {
+		// S = HALF_ORDER + 1 should be rejected
+		let mut half_order_plus_one = SECP256K1_HALF_ORDER;
+		// Increment: add 1 to the last byte, propagate carry
+		let mut carry = 1u16;
+		for byte in half_order_plus_one.iter_mut().rev() {
+			let sum = *byte as u16 + carry;
+			*byte = sum as u8;
+			carry = sum >> 8;
+			if carry == 0 {
+				break;
+			}
+		}
+		let mut sig = [0u8; 65];
+		sig[32..64].copy_from_slice(&half_order_plus_one);
+		assert!(!is_signature_normalized(&sig));
+
+		// S = 0xFF..FF (all ones) should be rejected
+		sig[32..64].fill(0xff);
+		assert!(!is_signature_normalized(&sig));
+	}
+
+	#[test]
+	fn sign_prehashed_produces_low_s() {
+		for i in 1..21u8 {
+			let seed = [i; 32];
+			let pair = Pair::from_seed(&seed);
+			let msg = sp_crypto_hashing::blake2_256(&[i]);
+			let sig = pair.sign_prehashed(&msg);
+			assert!(
+				is_signature_normalized(&sig.0),
+				"sign_prehashed produced high-S for seed {}",
+				i
+			);
+		}
+	}
+
+	#[test]
+	fn malleable_signature_is_rejected_by_normalization_check() {
+		// secp256k1 curve order N
+		let order: [u8; 32] = [
+			0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+			0xd0, 0x36, 0x41, 0x41,
+		];
+
+		let pair = Pair::from_seed(b"12345678901234567890123456789012");
+		let msg = sp_crypto_hashing::blake2_256(b"malleable test");
+		let sig = pair.sign_prehashed(&msg);
+
+		// Original signature should be low-S
+		assert!(is_signature_normalized(&sig.0));
+
+		// Compute malleable signature: s' = order - s
+		let s_bytes: [u8; 32] = sig.0[32..64].try_into().unwrap();
+		let mut s_prime = [0u8; 32];
+		let mut borrow = 0i16;
+		for i in (0..32).rev() {
+			let diff = order[i] as i16 - s_bytes[i] as i16 - borrow;
+			if diff < 0 {
+				s_prime[i] = (diff + 256) as u8;
+				borrow = 1;
+			} else {
+				s_prime[i] = diff as u8;
+				borrow = 0;
+			}
+		}
+
+		let mut malleable_sig = [0u8; 65];
+		malleable_sig[0..32].copy_from_slice(&sig.0[0..32]); // same R
+		malleable_sig[32..64].copy_from_slice(&s_prime); // s' = order - s
+		malleable_sig[64] = sig.0[64] ^ 1; // flip recovery id
+
+		// The malleable signature should have high-S (since original was low-S, complement is high)
+		assert!(
+			!is_signature_normalized(&malleable_sig),
+			"malleable signature should be rejected as high-S"
+		);
 	}
 }

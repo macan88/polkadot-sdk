@@ -1,0 +1,60 @@
+# Schema: Polkadot SDK PRDoc Schema (prdoc) v1.0.0
+# See doc at https://raw.githubusercontent.com/paritytech/polkadot-sdk/master/prdoc/schema_user.json
+
+title: "Remove libsecp256k1, enforce low-S ECDSA signatures (BIP-62 / EIP-2)"
+
+doc:
+  - audience: Runtime Dev
+    description: |
+      Completes the claims pallet migration from the deprecated `libsecp256k1` crate to
+      `secp256k1` and introduces low-S signature normalization (BIP-62 / EIP-2) across
+      pallet-revive EVM transaction validation and BEEFY ECDSA signature verification.
+
+      **Claims pallet** — `libsecp256k1` is removed from `polkadot-runtime-common` dependencies
+      and all feature flags. The test/benchmark helper `secp_utils::eth()` is corrected to use
+      `serialize_uncompressed()` (the `secp256k1` crate's `serialize()` returns 33 compressed
+      bytes, not the 65 uncompressed bytes expected by the caller).
+
+      **sp_core::ecdsa** — A new public constant `SECP256K1_HALF_ORDER` and helper function
+      `is_signature_normalized()` are added, providing a reusable check for whether a 65-byte
+      ECDSA signature has its S value in the lower half of the secp256k1 curve order.
+      `Pair::sign_prehashed()` now includes a debug assertion that produced signatures are low-S,
+      and the `k256` (no_std) path performs explicit normalization.
+
+      **pallet-revive** — `recover_eth_address()` now rejects signatures where S > N/2 before
+      calling `secp256k1_ecdsa_recover`, matching Ethereum post-Homestead transaction validation
+      (EIP-2). The `ECRecover` precompile is intentionally unchanged to match Ethereum behavior.
+
+      **sp-consensus-beefy** — `ecdsa_crypto::BeefyAuthorityId::verify()` now rejects signatures
+      where S > N/2 before calling `secp256k1_ecdsa_recover_compressed`. This ensures BEEFY
+      signatures are always in the canonical form expected by Ethereum-side light clients.
+
+      **secp256k1 dependency** — Upgraded from 0.30.0 to 0.31.1. Call sites are adapted to the
+      0.31 API: signing/recovery methods now take `Into<Message>` instead of `&Message`, and
+      `SecretKey::from_byte_array` takes an owned array instead of a reference.
+
+      Host functions (`secp256k1_ecdsa_recover`, `ecdsa_verify`, etc.) and
+      `Pair::verify()`/`Pair::verify_prehashed()` are not changed to preserve backward
+      compatibility with historical block verification.
+
+  - audience: Runtime User
+    description: |
+      EVM transactions submitted to pallet-revive now require low-S signatures per EIP-2. All
+      standard Ethereum signing libraries already produce low-S signatures by default, so no
+      action is needed for well-behaved signers. Transactions with non-canonical (high-S)
+      signatures will be rejected at validation time.
+
+      BEEFY ECDSA signature verification now also requires low-S. Validators using standard
+      signing tooling are unaffected.
+
+crates:
+  - name: polkadot-runtime-common
+    bump: patch
+  - name: sp-core
+    bump: minor
+  - name: sp-io
+    bump: patch
+  - name: pallet-revive
+    bump: patch
+  - name: sp-consensus-beefy
+    bump: patch

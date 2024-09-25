@@ -1293,7 +1293,7 @@ pub trait Crypto {
 		let ctx = secp256k1::SECP256K1;
 		#[cfg(not(feature = "std"))]
 		let ctx = secp256k1::Secp256k1::<secp256k1::VerifyOnly>::gen_new();
-		let pubkey = ctx.recover_ecdsa(&msg, &sig).map_err(|_| EcdsaVerifyError::BadSignature)?;
+		let pubkey = ctx.recover_ecdsa(msg, &sig).map_err(|_| EcdsaVerifyError::BadSignature)?;
 		let mut res = [0u8; 64];
 		res.copy_from_slice(&pubkey.serialize_uncompressed()[1..]);
 		Ok(res)
@@ -1341,7 +1341,7 @@ pub trait Crypto {
 		let ctx = secp256k1::SECP256K1;
 		#[cfg(not(feature = "std"))]
 		let ctx = secp256k1::Secp256k1::<secp256k1::VerifyOnly>::gen_new();
-		let pubkey = ctx.recover_ecdsa(&msg, &sig).map_err(|_| EcdsaVerifyError::BadSignature)?;
+		let pubkey = ctx.recover_ecdsa(msg, &sig).map_err(|_| EcdsaVerifyError::BadSignature)?;
 		Ok(pubkey.serialize())
 	}
 
