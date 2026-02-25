@@ -1370,8 +1370,7 @@ impl StatementStore for Store {
 					"Account {} has no statement allowance set",
 					HexDisplay::from(&account_id),
 				);
-				// Mock allowance for testing (100 statements, 512B each)
-				StatementAllowance::new(100, 100 * 1024 / 2)
+				return SubmitResult::Rejected(RejectionReason::NoAllowance);
 			},
 			Err(e) => {
 				log::debug!(
