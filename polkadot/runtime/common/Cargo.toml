@@ -54,7 +54,7 @@ pallet-babe = { optional = true, workspace = true }
 
 polkadot-primitives = { workspace = true }
 polkadot-runtime-parachains = { workspace = true }
-secp256k1 = { workspace = true }
+secp256k1 = { features = ["recovery", "alloc"], workspace = true }
 
 slot-range-helper = { workspace = true }
 xcm = { workspace = true }

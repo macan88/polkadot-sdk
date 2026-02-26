@@ -674,7 +674,7 @@ mod tests {
 			pair.as_inner_ref().sign_prehashed(&keccak_256(msg)).into();
 
 		// Valid low-S signature should verify
-		assert!(BeefyAuthorityId::<Keccak256>::verify(&pair.public(), &signature, msg));
+		assert!(BeefyAuthorityId::verify(&pair.public(), &signature, msg));
 
 		// Construct a high-S malleable variant: s' = order - s, v' = v ^ 1
 		let sig_bytes: &[u8] = signature.as_inner_ref().as_ref();
@@ -703,7 +703,7 @@ mod tests {
 
 		// High-S signature should be rejected
 		assert!(
-			!BeefyAuthorityId::<Keccak256>::verify(&pair.public(), &malleable_sig, msg),
+			!BeefyAuthorityId::verify(&pair.public(), &malleable_sig, msg),
 			"high-S BEEFY signature should be rejected"
 		);
 	}

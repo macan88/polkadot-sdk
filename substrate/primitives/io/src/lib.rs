@@ -1284,11 +1284,13 @@ pub trait Crypto {
 		sig: PassPointerAndRead<&[u8; 65], 65>,
 		msg: PassPointerAndRead<&[u8; 32], 32>,
 	) -> AllocateAndReturnByCodec<Result<[u8; 64], EcdsaVerifyError>> {
-		let rid = RecoveryId::from_i32(if sig[64] > 26 { sig[64] - 27 } else { sig[64] } as i32)
-			.map_err(|_| EcdsaVerifyError::BadV)?;
+		let rid = RecoveryId::try_from(
+			if sig[64] > 26 { sig[64] - 27 } else { sig[64] } as i32,
+		)
+		.map_err(|_| EcdsaVerifyError::BadV)?;
 		let sig = RecoverableSignature::from_compact(&sig[..64], rid)
 			.map_err(|_| EcdsaVerifyError::BadRS)?;
-		let msg = Message::from_digest_slice(msg).expect("Message is 32 bytes; qed");
+		let msg = Message::from_digest(*msg);
 		#[cfg(feature = "std")]
 		let ctx = secp256k1::SECP256K1;
 		#[cfg(not(feature = "std"))]
@@ -1332,11 +1334,13 @@ pub trait Crypto {
 		sig: PassPointerAndRead<&[u8; 65], 65>,
 		msg: PassPointerAndRead<&[u8; 32], 32>,
 	) -> AllocateAndReturnByCodec<Result<[u8; 33], EcdsaVerifyError>> {
-		let rid = RecoveryId::from_i32(if sig[64] > 26 { sig[64] - 27 } else { sig[64] } as i32)
-			.map_err(|_| EcdsaVerifyError::BadV)?;
+		let rid = RecoveryId::try_from(
+			if sig[64] > 26 { sig[64] - 27 } else { sig[64] } as i32,
+		)
+		.map_err(|_| EcdsaVerifyError::BadV)?;
 		let sig = RecoverableSignature::from_compact(&sig[..64], rid)
 			.map_err(|_| EcdsaVerifyError::BadRS)?;
-		let msg = Message::from_digest_slice(msg).expect("Message is 32 bytes; qed");
+		let msg = Message::from_digest(*msg);
 		#[cfg(feature = "std")]
 		let ctx = secp256k1::SECP256K1;
 		#[cfg(not(feature = "std"))]

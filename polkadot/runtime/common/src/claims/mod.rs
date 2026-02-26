@@ -706,11 +706,11 @@ where
 #[cfg(any(test, feature = "runtime-benchmarks"))]
 mod secp_utils {
 	use super::*;
-	use secp256k1::{Message, Secp256k1, SECP256K1};
+	use secp256k1::{Message, Secp256k1};
 
 	pub fn public(secret: &secp256k1::SecretKey) -> secp256k1::PublicKey {
 		let secp = Secp256k1::new();
-		secp256k1::PublicKey::from_secret_key(&secp, &secret)
+		secp256k1::PublicKey::from_secret_key(&secp, secret)
 	}
 	pub fn eth(secret: &secp256k1::SecretKey) -> EthereumAddress {
 		let mut res = EthereumAddress::default();
@@ -727,12 +727,13 @@ mod secp_utils {
 			extra,
 		));
 
-		let message = Message::from_digest_slice(&msg).unwrap();
+		let secp = Secp256k1::new();
+		let message = Message::from_digest(msg);
 		let (recovery_id, sig) =
-			SECP256K1.sign_ecdsa_recoverable(message, &secret).serialize_compact();
+			secp.sign_ecdsa_recoverable(message, secret).serialize_compact();
 		let mut r = [0u8; 65];
 		r[0..64].copy_from_slice(&sig[..]);
-		r[64] = recovery_id as u8;
+		r[64] = i32::from(recovery_id) as u8;
 		EcdsaSignature(r)
 	}
 }
